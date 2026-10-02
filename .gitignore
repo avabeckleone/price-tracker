@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+screenshots/
+price_tracker.log
+price_tracker-error.log
+com.avabeckleone.price-tracker.plist
+Archive.zip
