@@ -76,11 +76,15 @@ PRIME_EXCLUSIVE_MARKERS = [
     "prime members", "prime-only deal",
 ]
 
-CAPTCHA_MARKERS = [
+ACCESS_CHALLENGE_MARKERS = [
     "Enter the characters you see below",
     "Type the characters you see in this image",
     "Sorry, we just need to make sure you're not a robot",
     "/errors/validateCaptcha",
+    "robot check",
+    "automated access",
+    "validatecaptcha",
+    "Click the button below to continue shopping",
 ]
 
 
@@ -123,12 +127,17 @@ def screenshot_basename(title: str, asin: str, captured_at: datetime) -> str:
     return f"{safe_title}_{captured_at.strftime('%Y%m%d_%H%M%S')}.png"
 
 
-def is_captcha(page) -> bool:
+def is_access_challenge(page) -> bool:
+    # Amazon's challenge pages vary by region and change their wording. Check
+    # both the final URL and rendered page text, case-insensitively.
     try:
-        html = page.content()
+        if "validatecaptcha" in page.url.lower():
+            return True
+        page_text = page.locator("body").inner_text(timeout=3000)
     except Exception:
         return False
-    return any(marker in html for marker in CAPTCHA_MARKERS)
+    page_text = page_text.lower()
+    return any(marker.lower() in page_text for marker in ACCESS_CHALLENGE_MARKERS)
 
 
 def append_row(row: dict) -> None:
@@ -169,13 +178,13 @@ def check_url(page, url: str) -> dict:
     }
 
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        response = page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(2500)  # let price render
 
-        captcha = is_captcha(page)
+        access_challenge = is_access_challenge(page)
         row["title"] = first_text(page, ["#productTitle"])
-        row["price"] = "" if captcha else first_text(page, PRICE_SELECTORS)
-        if not captcha:
+        row["price"] = "" if access_challenge else first_text(page, PRICE_SELECTORS)
+        if not access_challenge and row["title"]:
             row["regular_price"] = first_text(page, REGULAR_PRICE_SELECTORS)
             row["non_deal_price"] = find_non_deal_price(page)
             try:
@@ -187,8 +196,14 @@ def check_url(page, url: str) -> dict:
             except Exception:
                 pass
 
-        if captcha:
-            row["status"] = "captcha"
+        if response and response.status >= 400:
+            row["status"] = f"http_{response.status}"
+        elif access_challenge:
+            row["status"] = "access_challenge"
+        elif not row["title"]:
+            # A blank title across many products usually means an interstitial,
+            # challenge, or unexpected page layout, not 19 genuinely missing prices.
+            row["status"] = "page_unrecognized"
         elif row["price"]:
             row["status"] = "ok"
         else:
@@ -233,6 +248,11 @@ def main() -> None:
             row = check_url(page, url)
             append_row(row)
             print(f"    status={row['status']}  price={row['price'] or '-'}  title={row['title'][:60]}")
+            if row["status"] in {"access_challenge", "page_unrecognized"} or row["status"].startswith("http_"):
+                try:
+                    print(f"    page_title={page.title()[:100]}  final_url={page.url[:180]}")
+                except Exception:
+                    pass
 
             if i < len(urls):
                 time.sleep(random.uniform(4, 9))  # be polite, avoid hammering

@@ -1,8 +1,8 @@
-name: Hourly Amazon price check
+name: Amazon price check (every 2 hours)
 
 on:
   schedule:
-    - cron: "15 * * * *"
+    - cron: "15 */2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -52,5 +52,5 @@ jobs:
           path: |
             prices.csv
             screenshots/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90
