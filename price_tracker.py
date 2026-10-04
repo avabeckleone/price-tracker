@@ -17,11 +17,13 @@ Setup (one time):
 
 import argparse
 import csv
+import os
 import random
 import re
 import sys
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -87,6 +89,10 @@ ACCESS_CHALLENGE_MARKERS = [
     "Click the button below to continue shopping",
 ]
 
+NAVIGATION_ATTEMPTS = 2
+NAVIGATION_TIMEOUT_MS = 30_000
+PRICE_RENDER_TIMEOUT_MS = 7_000
+
 
 def load_urls(path: Path) -> list[str]:
     if not path.exists():
@@ -140,6 +146,21 @@ def is_access_challenge(page) -> bool:
     return any(marker.lower() in page_text for marker in ACCESS_CHALLENGE_MARKERS)
 
 
+def wait_for_price(page) -> None:
+    """Give client-rendered prices time to appear before marking them missing."""
+    try:
+        page.wait_for_function(
+            "selectors => selectors.some(selector => { "
+            "const element = document.querySelector(selector); "
+            "return element && element.textContent.trim(); "
+            "})",
+            arg=PRICE_SELECTORS,
+            timeout=PRICE_RENDER_TIMEOUT_MS,
+        )
+    except PlaywrightTimeout:
+        pass
+
+
 def append_row(row: dict) -> None:
     if CSV_PATH.exists() and CSV_PATH.stat().st_size:
         with CSV_PATH.open("r", newline="", encoding="utf-8") as f:
@@ -177,47 +198,80 @@ def check_url(page, url: str) -> dict:
         "url": url,
     }
 
+    response = None
     try:
-        response = page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(2500)  # let price render
-
-        access_challenge = is_access_challenge(page)
-        row["title"] = first_text(page, ["#productTitle"])
-        row["price"] = "" if access_challenge else first_text(page, PRICE_SELECTORS)
-        if not access_challenge and row["title"]:
-            row["regular_price"] = first_text(page, REGULAR_PRICE_SELECTORS)
-            row["non_deal_price"] = find_non_deal_price(page)
+        for attempt in range(1, NAVIGATION_ATTEMPTS + 1):
             try:
-                page_text = (page.locator("body").inner_text() or "").lower()
-                row["prime_exclusive"] = (
-                    "yes" if any(marker in page_text for marker in PRIME_EXCLUSIVE_MARKERS)
-                    else "no"
+                response = page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=NAVIGATION_TIMEOUT_MS,
                 )
-            except Exception:
-                pass
+                break
+            except PlaywrightTimeout:
+                if attempt == NAVIGATION_ATTEMPTS:
+                    raise
+                print(f"    navigation timed out; retrying ({attempt}/{NAVIGATION_ATTEMPTS - 1})")
+                page.wait_for_timeout(1500)
+            except Exception as e:
+                if attempt == NAVIGATION_ATTEMPTS:
+                    raise
+                print(
+                    f"    navigation error ({type(e).__name__}); "
+                    f"retrying ({attempt}/{NAVIGATION_ATTEMPTS - 1})"
+                )
+                page.wait_for_timeout(1500)
 
         if response and response.status >= 400:
             row["status"] = f"http_{response.status}"
-        elif access_challenge:
-            row["status"] = "access_challenge"
-        elif not row["title"]:
-            # A blank title across many products usually means an interstitial,
-            # challenge, or unexpected page layout, not 19 genuinely missing prices.
-            row["status"] = "page_unrecognized"
-        elif row["price"]:
-            row["status"] = "ok"
         else:
-            row["status"] = "price_not_found"
+            page.wait_for_timeout(1500)
+            access_challenge = is_access_challenge(page)
+            row["title"] = first_text(page, ["#productTitle"])
 
-        shot_name = screenshot_basename(row["title"], asin, now)
-        shot_path = SCREENSHOT_DIR / shot_name
-        page.screenshot(path=str(shot_path), full_page=True)
-        row["screenshot"] = str(shot_path.relative_to(BASE_DIR))
+            if access_challenge:
+                row["status"] = "access_challenge"
+            elif not row["title"]:
+                row["status"] = "page_unrecognized"
+            else:
+                row["price"] = first_text(page, PRICE_SELECTORS)
+                if not row["price"]:
+                    wait_for_price(page)
+                    row["price"] = first_text(page, PRICE_SELECTORS)
+
+                row["regular_price"] = first_text(page, REGULAR_PRICE_SELECTORS)
+                row["non_deal_price"] = find_non_deal_price(page)
+                try:
+                    page_text = (page.locator("body").inner_text() or "").lower()
+                    row["prime_exclusive"] = (
+                        "yes" if any(marker in page_text for marker in PRIME_EXCLUSIVE_MARKERS)
+                        else "no"
+                    )
+                except Exception:
+                    page_text = ""
+
+                if row["price"]:
+                    row["status"] = "ok"
+                elif any(phrase in page_text for phrase in (
+                    "currently unavailable", "temporarily out of stock", "out of stock"
+                )):
+                    row["status"] = "unavailable"
+                else:
+                    row["status"] = "price_not_found"
 
     except PlaywrightTimeout:
         row["status"] = "timeout"
     except Exception as e:
         row["status"] = f"error: {type(e).__name__}"
+
+    # Keep visual evidence for navigation failures as well as normal pages.
+    try:
+        shot_name = screenshot_basename(row["title"], asin, now)
+        shot_path = SCREENSHOT_DIR / shot_name
+        page.screenshot(path=str(shot_path), full_page=True)
+        row["screenshot"] = str(shot_path.relative_to(BASE_DIR))
+    except Exception as e:
+        print(f"    screenshot failed: {type(e).__name__}")
 
     return row
 
@@ -230,16 +284,13 @@ def main() -> None:
 
     urls = load_urls(Path(args.urls))
     SCREENSHOT_DIR.mkdir(exist_ok=True)
+    run_rows = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not args.show)
         context = browser.new_context(
             viewport={"width": 1366, "height": 900},
             locale="en-CA",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
         )
         page = context.new_page()
 
@@ -247,8 +298,9 @@ def main() -> None:
             print(f"[{i}/{len(urls)}] {url}")
             row = check_url(page, url)
             append_row(row)
+            run_rows.append(row)
             print(f"    status={row['status']}  price={row['price'] or '-'}  title={row['title'][:60]}")
-            if row["status"] in {"access_challenge", "page_unrecognized"} or row["status"].startswith("http_"):
+            if row["status"] != "ok":
                 try:
                     print(f"    page_title={page.title()[:100]}  final_url={page.url[:180]}")
                 except Exception:
@@ -259,8 +311,19 @@ def main() -> None:
 
         browser.close()
 
+    status_counts = Counter(row["status"] for row in run_rows)
+    summary = ", ".join(f"{status}: {count}" for status, count in sorted(status_counts.items()))
+    print(f"\nRun summary: {summary or 'no rows recorded'}")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write(f"## Price tracker summary\n\n{summary or 'No rows recorded.'}\n")
+
     print(f"\nDone. Prices logged to {CSV_PATH}")
     print(f"Screenshots saved in {SCREENSHOT_DIR}")
+
+    if status_counts.get("ok", 0) == 0 and status_counts.get("unavailable", 0) != len(run_rows):
+        sys.exit("No prices were captured in this run; see the screenshots artifact for the returned pages.")
 
 
 if __name__ == "__main__":
