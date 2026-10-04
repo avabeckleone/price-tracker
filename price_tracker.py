@@ -18,7 +18,6 @@ Setup (one time):
 import argparse
 import csv
 import os
-import random
 import re
 import sys
 import tempfile
@@ -287,16 +286,19 @@ def main() -> None:
     run_rows = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not args.show)
-        context = browser.new_context(
-            viewport={"width": 1366, "height": 900},
-            locale="en-CA",
-        )
-        page = context.new_page()
-
         for i, url in enumerate(urls, start=1):
             print(f"[{i}/{len(urls)}] {url}")
-            row = check_url(page, url)
+            browser = p.chromium.launch(headless=not args.show)
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1366, "height": 900},
+                    locale="en-CA",
+                )
+                page = context.new_page()
+                row = check_url(page, url)
+            finally:
+                browser.close()
+
             append_row(row)
             run_rows.append(row)
             print(f"    status={row['status']}  price={row['price'] or '-'}  title={row['title'][:60]}")
@@ -307,9 +309,7 @@ def main() -> None:
                     pass
 
             if i < len(urls):
-                time.sleep(random.uniform(4, 9))  # be polite, avoid hammering
-
-        browser.close()
+                time.sleep(10)
 
     status_counts = Counter(row["status"] for row in run_rows)
     summary = ", ".join(f"{status}: {count}" for status, count in sorted(status_counts.items()))
