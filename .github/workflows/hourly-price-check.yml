@@ -1,15 +1,15 @@
-name: Amazon price check (every 4 hours)
+name: Amazon price check (every 6 hours)
 
 on:
   schedule:
-    - cron: "15 */4 * * *"
+    - cron: "15 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: hourly-price-check
+  group: six-hourly-price-check
   cancel-in-progress: false
 
 jobs:
