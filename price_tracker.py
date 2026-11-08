@@ -17,13 +17,15 @@ Setup (one time):
 
 import argparse
 import csv
+import json
 import os
 import re
+import secrets
 import sys
 import tempfile
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -279,7 +281,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Screenshot Amazon pages and log prices.")
     parser.add_argument("--urls", default=str(BASE_DIR / "urls.txt"), help="File with one URL per line")
     parser.add_argument("--show", action="store_true", help="Show the browser window")
+    parser.add_argument(
+        "--schedule", action="store_true",
+        help="Run once at a random time in each local two-hour window",
+    )
     args = parser.parse_args()
+
+    if args.schedule:
+        run_random_schedule(args)
+        return
+
+    run_tracker(args)
+
+
+def run_tracker(args) -> None:
 
     urls = load_urls(Path(args.urls))
     SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -324,6 +339,50 @@ def main() -> None:
 
     if status_counts.get("ok", 0) == 0 and status_counts.get("unavailable", 0) != len(run_rows):
         sys.exit("No prices were captured in this run; see the screenshots artifact for the returned pages.")
+
+
+def run_random_schedule(args) -> None:
+    """Run once per local two-hour window, saving each random target time."""
+    state_path = BASE_DIR / ".price_tracker_schedule.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = {}
+
+    targets = state.setdefault("target_minutes", {})
+    print("Random schedule active: one run in each local two-hour window.", flush=True)
+    while True:
+        now = datetime.now().astimezone()
+        window_index = now.hour // 2
+        day_key = now.strftime("%Y-%m-%d")
+        key = f"{day_key}:{window_index}"
+        if key not in targets or (key != state.get("last_window") and targets[key] > 90):
+            # Use the first 90 minutes of each two-hour window. That leaves
+            # at least 30 minutes between adjacent windows' scheduled times.
+            targets[key] = secrets.randbelow(91)
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        run_at = datetime.strptime(day_key, "%Y-%m-%d").replace(
+            hour=window_index * 2, minute=0, second=0, microsecond=0
+        ) + timedelta(minutes=targets[key])
+        if now.replace(tzinfo=None) >= run_at and state.get("last_window") != key:
+            last_started = state.get("last_started")
+            if last_started:
+                elapsed = (now.replace(tzinfo=None) - datetime.fromisoformat(last_started)).total_seconds()
+                if elapsed < 30 * 60:
+                    time.sleep(min(30, 30 * 60 - elapsed))
+                    continue
+            print(
+                f"Running scheduled check for window {window_index * 2:02d}:00-"
+                f"{window_index * 2 + 2:02d}:00 (local time).",
+                flush=True,
+            )
+            # Record before starting so launchd restarts cannot duplicate a run.
+            state["last_window"] = key
+            state["last_started"] = now.replace(tzinfo=None).isoformat(timespec="seconds")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            run_tracker(args)
+        time.sleep(30)
 
 
 if __name__ == "__main__":
