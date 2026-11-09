@@ -2,7 +2,7 @@
 
 # Analyze the price tracker CSV using base R only.
 # Usage: Rscript analysis.r [input.csv] [output-directory]
-
+# Tony testing
 arguments <- commandArgs(trailingOnly = TRUE)
 if (length(arguments) > 2L) {
   stop("Usage: Rscript analysis.r [input.csv] [output-directory]", call. = FALSE)
