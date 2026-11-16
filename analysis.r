@@ -11,13 +11,41 @@ prices[currency_cols] <- lapply(
   function(x) as.numeric(gsub("[$,]", "", x))
 )
 
-# Correct recorded unit fields for these two matched product pairs.
-prices$unit_count[
-  prices$pair_id == "diaper_pail_refills" & prices$asin == "B07CRVNTK1"
-] <- 8
+# Restore package-level baselines that were recorded as per-unit prices.
+original_unit_count <- prices$unit_count
+per_unit_baseline <- !is.na(prices$baseline_price) &
+  !is.na(original_unit_count) & original_unit_count > 1 &
+  (
+    prices$baseline_price < 1 |
+      (!is.na(prices$unit_price) &
+         abs(prices$baseline_price - prices$unit_price) < 1e-8)
+  ) &
+  !(prices$pair_id %in% "baby_wipes")
+prices$baseline_price[per_unit_baseline] <-
+  prices$baseline_price[per_unit_baseline] * original_unit_count[per_unit_baseline]
+
+# The wipes' baseline values were also recorded as per-wipe prices.
 prices$baseline_price[
-  prices$pair_id == "baby_wipes" & prices$asin == "B07H4V7M4C"
+  prices$pair_id %in% "baby_wipes" & prices$asin %in% "B07H4V7M4C"
 ] <- 24.99
+bad_huggies_baseline <- prices$pair_id %in% "baby_wipes" &
+  prices$asin %in% "B0BL8RWHV2" &
+  !is.na(prices$baseline_price) & prices$baseline_price < 1
+prices$baseline_price[bad_huggies_baseline] <- prices$price[bad_huggies_baseline]
+
+# Fill missing baselines from observed price; use regular price only if price is absent.
+missing_baseline <- is.na(prices$baseline_price) | prices$baseline_price <= 0
+fallback_price <- prices$price
+missing_price <- is.na(fallback_price) | fallback_price <= 0
+fallback_price[missing_price] <- prices$regular_price[missing_price]
+prices$baseline_price[missing_baseline] <- fallback_price[missing_baseline]
+
+# Compare package prices for all pairs except diapers and wipes, which use item counts.
+paired_rows <- !is.na(prices$pair_id)
+prices$unit_count[paired_rows & !(prices$pair_id %in% c("diaper_pail_refills", "baby_wipes"))] <- 1
+prices$unit_count[prices$pair_id %in% "diaper_pail_refills"] <- 8
+prices$unit_count[prices$pair_id %in% "baby_wipes" & prices$asin %in% "B07H4V7M4C"] <- 810
+prices$unit_count[prices$pair_id %in% "baby_wipes" & prices$asin %in% "B0BL8RWHV2"] <- 960
 
 library(fixest)
 
