@@ -3,22 +3,22 @@ coxph(formula = Surv(time, event) ~ follower_is_ab + trig_abs +
     trig_down + strata(pair_id), data = ev_df, ties = "efron", 
     cluster = pair_id)
 
-  n= 182, number of events= 59 
+  n= 181, number of events= 59 
 
-                    coef exp(coef)  se(coef) robust se      z Pr(>|z|)
-follower_is_ab  0.001517  1.001518  0.326567  0.418556  0.004    0.997
-trig_abs       -0.024459  0.975838  0.405990  0.221759 -0.110    0.912
-trig_down      -0.042203  0.958675  0.277512  0.249330 -0.169    0.866
+                   coef exp(coef) se(coef) robust se      z Pr(>|z|)
+follower_is_ab -0.02667   0.97368  0.33076   0.44057 -0.061    0.952
+trig_abs        0.30683   1.35911  0.61298   0.38977  0.787    0.431
+trig_down      -0.05465   0.94682  0.27812   0.24518 -0.223    0.824
 
                exp(coef) exp(-coef) lower .95 upper .95
-follower_is_ab    1.0015     0.9985    0.4409     2.275
-trig_abs          0.9758     1.0248    0.6319     1.507
-trig_down         0.9587     1.0431    0.5881     1.563
+follower_is_ab    0.9737     1.0270    0.4106     2.309
+trig_abs          1.3591     0.7358    0.6331     2.918
+trig_down         0.9468     1.0562    0.5856     1.531
 
-Concordance= 0.507  (se = 0.084 )
-Likelihood ratio test= 0.03  on 3 df,   p=1
-Wald test            = 0.03  on 3 df,   p=1
-Score (logrank) test = 0.03  on 3 df,   p=1,   Robust = 0.03  p=1
+Concordance= 0.569  (se = 0.066 )
+Likelihood ratio test= 0.26  on 3 df,   p=1
+Wald test            = 1.41  on 3 df,   p=0.7
+Score (logrank) test = 0.27  on 3 df,   p=1,   Robust = 1  p=0.8
 
   (Note: the likelihood ratio and score tests assume independence of
      observations within a cluster, the Wald and robust score tests do not).

@@ -2,25 +2,25 @@
                        Distributed Lag Response Model
 Dependent Var.:                                     y
                                                      
-x_L0                                  0.0798 (0.0748)
-x_L1                                 -0.0439 (0.0591)
-x_L2                                  0.0423 (0.0699)
-x_L3                                -0.0403. (0.0197)
-x_L4                                 -0.0050 (0.0284)
-x_L5                                 -0.0237 (0.0514)
-x_L0 x follower_is_ab                -0.0770 (0.0753)
-x_L1 x follower_is_ab                 0.0441 (0.0599)
-x_L2 x follower_is_ab                -0.0513 (0.0733)
-x_L3 x follower_is_ab                 0.0363 (0.0216)
-x_L4 x follower_is_ab                -0.0003 (0.0329)
-x_L5 x follower_is_ab                 0.0316 (0.0534)
-Fixed-Effects:                      -----------------
+x_L0                                  0.0756 (0.0719)
+x_L1                                 -0.0357 (0.0501)
+x_L2                                  0.0335 (0.0694)
+x_L3                                 -0.0580 (0.0387)
+x_L4                                  0.0125 (0.0262)
+x_L5                                 -0.0306 (0.0562)
+x_L0 x follower_is_ab                -0.0545 (0.0655)
+x_L1 x follower_is_ab                 0.0391 (0.0476)
+x_L2 x follower_is_ab                -0.0588 (0.0845)
+x_L3 x follower_is_ab                 0.0438 (0.0430)
+x_L4 x follower_is_ab                -0.0228 (0.0298)
+x_L5 x follower_is_ab                 0.0724 (0.0644)
+Fixed-Effects:                       ----------------
 role_id                                           Yes
 day_str-follower_is_ab                            Yes
-______________________              _________________
+______________________               ________________
 S.E.: Clustered                           by: pair_id
 Observations                                    1,542
-R2                                            0.05537
-Within R2                                     0.00078
+R2                                            0.09094
+Within R2                                     0.00514
 ---
 Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
