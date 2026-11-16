@@ -2,14 +2,14 @@
                 Item Median Baseline Panel w/ Pair and Day FE
 Dependent Var.:     ln_unit_baseline         ln_unit_baseline
                                                              
-is_basics            -1.186 (0.7544)         -0.9529 (0.8676)
+is_basics           -0.0987 (0.1664)          0.1638 (0.1416)
 Fixed-Effects:      ----------------         ----------------
 pair_id                          Yes                      Yes
 time_bucket                       No                      Yes
 _______________     ________________         ________________
 S.E.: Clustered          by: pair_id              by: pair_id
 Observations                      23                    7,773
-R2                           0.81773                  0.86276
-Within R2                    0.20279                  0.10452
+R2                           0.97970                  0.92991
+Within R2                    0.03423                  0.01115
 ---
 Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1

@@ -10,6 +10,15 @@ prices[currency_cols] <- lapply(
   prices[currency_cols],
   function(x) as.numeric(gsub("[$,]", "", x))
 )
+
+# Correct recorded unit fields for these two matched product pairs.
+prices$unit_count[
+  prices$pair_id == "diaper_pail_refills" & prices$asin == "B07CRVNTK1"
+] <- 8
+prices$baseline_price[
+  prices$pair_id == "baby_wipes" & prices$asin == "B07H4V7M4C"
+] <- 24.99
+
 library(fixest)
 
 setFixest_notes(FALSE)
