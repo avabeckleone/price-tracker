@@ -1,0 +1,24 @@
+Call:
+coxph(formula = Surv(time, event) ~ follower_is_ab + trig_abs + 
+    trig_down + strata(pair_id), data = ev_df, ties = "efron", 
+    cluster = pair_id)
+
+  n= 182, number of events= 59 
+
+                    coef exp(coef)  se(coef) robust se      z Pr(>|z|)
+follower_is_ab  0.001517  1.001518  0.326567  0.418556  0.004    0.997
+trig_abs       -0.024459  0.975838  0.405990  0.221759 -0.110    0.912
+trig_down      -0.042203  0.958675  0.277512  0.249330 -0.169    0.866
+
+               exp(coef) exp(-coef) lower .95 upper .95
+follower_is_ab    1.0015     0.9985    0.4409     2.275
+trig_abs          0.9758     1.0248    0.6319     1.507
+trig_down         0.9587     1.0431    0.5881     1.563
+
+Concordance= 0.507  (se = 0.084 )
+Likelihood ratio test= 0.03  on 3 df,   p=1
+Wald test            = 0.03  on 3 df,   p=1
+Score (logrank) test = 0.03  on 3 df,   p=1,   Robust = 0.03  p=1
+
+  (Note: the likelihood ratio and score tests assume independence of
+     observations within a cluster, the Wald and robust score tests do not).

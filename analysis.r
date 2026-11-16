@@ -45,6 +45,17 @@ reg_baseline <- feols(ln_unit_baseline ~ is_basics | pair_id,
 panel_rows <- baseline_rows
 panel_rows$time_bucket <- factor(substr(panel_rows$timestamp, 1, 10))
 
+# The strategic-interaction section expects a daily price panel with the same
+# variable names used elsewhere in this script.
+df <- subset(
+  prices,
+  !is.na(pair_id) &
+    !is.na(is_basics) &
+    !is.na(price) &
+    price > 0
+)
+df$time_bucket <- factor(substr(df$timestamp, 1, 10))
+
 # Panel sensitivity check with pair and day fixed effects.
 reg_baseline_panel <- feols(ln_unit_baseline ~ is_basics | pair_id + time_bucket,
                             data = panel_rows,
@@ -351,3 +362,192 @@ plot_pair_slope(
   df_item_sales, "ep_per_30", "Sale Episodes per 30 Observed Days",
   "Promotional Episode Cadence by Pair", "promotional_episodes.png"
 )
+
+# ============ PILLAR 3: STRATEGIC INTERACTION & LEADER-FOLLOWER DYNAMICS ============
+library(tidyverse)
+library(fixest)
+library(survival)
+
+# ---- 3a. Panel & Lag Preparation ----
+# Ensure daily/time-bucket alignment: pick the last observation per pair-brand-date
+df_daily <- df %>%
+  mutate(date = as_date(time_bucket)) %>%
+  group_by(pair_id, is_basics, date) %>%
+  slice_tail(n = 1) %>%
+  ungroup()
+
+# Verify that every pair has both Amazon Basics (is_basics == 1) and Twin (is_basics == 0)
+bad_pairs <- df_daily %>%
+  group_by(pair_id) %>%
+  summarize(roles = n_distinct(is_basics), .groups = "drop") %>%
+  filter(roles != 2)
+
+if (nrow(bad_pairs) > 0) {
+  stop("Pairs missing an Amazon Basics or a Twin series: ", paste(bad_pairs$pair_id, collapse = ", "))
+}
+
+# Create a complete calendar balanced panel per pair and brand
+pair_calendar <- df_daily %>%
+  group_by(pair_id) %>%
+  reframe(date = seq(min(date), max(date), by = "day"))
+
+df_panel <- pair_calendar %>%
+  left_join(df_daily %>% select(pair_id, is_basics, date, price), by = c("pair_id", "date")) %>%
+  arrange(pair_id, is_basics, date) %>%
+  group_by(pair_id, is_basics) %>%
+  mutate(dlnp = log(price) - log(lag(price))) %>%
+  ungroup()
+
+# Reshape wide so both AB (is_basics == 1) and Twin (is_basics == 0) changes sit side-by-side
+pair_date_cal <- df_daily %>%
+  group_by(pair_id) %>%
+  reframe(date = seq(min(date), max(date), by = "day"))
+
+df_wide <- pair_date_cal %>%
+  left_join(df_panel %>% filter(is_basics == 1) %>% select(pair_id, date, d_ab = dlnp), by = c("pair_id", "date")) %>%
+  left_join(df_panel %>% filter(is_basics == 0) %>% select(pair_id, date, d_tw = dlnp), by = c("pair_id", "date")) %>%
+  arrange(pair_id, date)
+
+# Generate positive/negative components and K lags (e.g., K = 5 days) for distributed-lag modeling
+K <- 5
+for (s in c("ab", "tw")) {
+  df_wide[[paste0("d_", s, "_pos")]] <- pmax(df_wide[[paste0("d_", s)]], 0)
+  df_wide[[paste0("d_", s, "_neg")]] <- pmin(df_wide[[paste0("d_", s)]], 0)
+  for (k in 0:K) {
+    for (suf in c("", "_pos", "_neg")) {
+      src <- paste0("d_", s, suf)
+      df_wide[[paste0("L", k, suf, "_", s)]] <- ave(df_wide[[src]], df_wide$pair_id, FUN = function(z) dplyr::lag(z, k))
+    }
+  }
+}
+
+# ---- 3b. Stacked Distributed-Lag Regression & Response Curves ----
+make_stack <- function(w) {
+  mk <- function(follower, leader, fab) {
+    out <- tibble(pair_id = w$pair_id, date = w$date, follower_is_ab = fab, y = w[[paste0("d_", follower)]])
+    for (k in 0:K) {
+      out[[paste0("x_L",  k)]] <- w[[paste0("L", k, "_",      leader)]]
+      out[[paste0("xp_L", k)]] <- w[[paste0("L", k, "_pos_", leader)]]
+      out[[paste0("xn_L", k)]] <- w[[paste0("L", k, "_neg_", leader)]]
+    }
+    out
+  }
+  bind_rows(mk("ab", "tw", 1L), mk("tw", "ab", 0L)) %>%
+    mutate(role_id = paste(pair_id, follower_is_ab), day_str = as.character(date))
+}
+
+stk <- make_stack(df_wide)
+
+lag_terms <- paste0("x_L", 0:K)
+fml_resp <- as.formula(paste("y ~", paste(c(lag_terms, paste0(lag_terms, ":follower_is_ab")), collapse = " + "),
+                             "| role_id + day_str^follower_is_ab"))
+m_resp <- feols(fml_resp, data = stk, cluster = ~pair_id)
+response_table <- etable(m_resp, headers = c("Distributed Lag Response Model"))
+writeLines(
+  capture.output(print(response_table)),
+  file.path(output_dir, "strategic_response_regression.txt")
+)
+print(response_table)
+
+# Helper function for linear combinations of coefficients
+lincom <- function(m, terms, w = rep(1, length(terms))) {
+  b <- coef(m)[terms]; V <- vcov(m)[terms, terms, drop = FALSE]
+  est <- sum(w * b); se <- sqrt(drop(t(w) %T*% V %*% w)); dfree <- degrees_freedom(m, type = "t")
+  tibble(est = est, se = se, lo = est - qt(.975, dfree) * se, hi = est + qt(.975, dfree) * se,
+         p = 2 * pt(-abs(est / se), dfree))
+}
+
+# ---- 3c. Asymmetry (Response to Price Increases vs. Price Cuts) ----
+fml_asym <- as.formula(paste("y ~",
+  paste(c(paste0("xp_L", 0:K), paste0("xn_L", 0:K),
+          paste0("xp_L", 0:K, ":follower_is_ab"), paste0("xn_L", 0:K, ":follower_is_ab")), collapse = " + "),
+  "| role_id + day_str^follower_is_ab"))
+m_asym <- feols(fml_asym, data = stk, cluster = ~pair_id)
+asymmetry_table <- etable(m_asym, headers = c("Price Increase vs. Cut Response"))
+writeLines(
+  capture.output(print(asymmetry_table)),
+  file.path(output_dir, "strategic_asymmetry_regression.txt")
+)
+print(asymmetry_table)
+
+# ---- 3d. Response Time (Survival Analysis & Kaplan-Meier Curves) ----
+min_change <- 0.01 # 1% log price change threshold to trigger an event
+max_wait   <- 7    # 7-day follow-up window
+
+make_events <- function(w, leader, follower) {
+  w %>%
+    group_by(pair_id) %>%
+    group_modify(function(g, key) {
+      dl <- g[[paste0("d_", leader)]]; dfw <- g[[paste0("d_", follower)]]; n <- length(dl)
+      idx <- which(!is.na(dl) & abs(dl) >= min_change)
+      map_dfr(idx, function(i) {
+        js <- seq_len(min(max_wait, n - i))
+        if (length(js) == 0) return(NULL)
+        fol <- dfw[i + js]
+        hit <- which(!is.na(fol) & abs(fol) >= min_change)
+        if (length(hit) > 0) return(tibble(date = g$date[i], time = js[hit[1]], event = 1L, trig = dl[i]))
+        seen <- which(!is.na(fol))
+        if (length(seen) == 0) return(NULL)
+        tibble(date = g$date[i], time = js[max(seen)], event = 0L, trig = dl[i])
+      })
+    }) %>%
+    ungroup()
+}
+
+ev_df <- bind_rows(
+    make_events(df_wide, "tw", "ab") %>% mutate(follower_is_ab = 1L),
+    make_events(df_wide, "ab", "tw") %>% mutate(follower_is_ab = 0L)
+  ) %>%
+  mutate(
+    trig_abs  = abs(trig),
+    trig_down = as.integer(trig < 0),
+    trig_dir  = if_else(trig < 0, "Price cut", "Price increase"),
+    follower  = if_else(follower_is_ab == 1, "Amazon Basics follows Twin", "Twin follows Amazon Basics")
+  )
+
+# Kaplan-Meier Survival Curves for Response Time
+km_all <- survfit(Surv(time, event) ~ follower, data = ev_df)
+
+km_tidy <- function(fit) {
+  s <- if (is.null(fit$strata)) rep("all", length(fit$time)) else rep(names(fit$strata), fit$strata)
+  tibble(time = fit$time, surv = fit$surv, lo = fit$lower, hi = fit$upper, strata = s) %>%
+    group_by(strata) %>%
+    group_modify(~ bind_rows(tibble(time = 0, surv = 1, lo = 1, hi = 1), .x)) %>%
+    ungroup() %>%
+    mutate(follower = str_match(strata, "follower=([^,]+)")[, 2])
+}
+
+col_follow <- c("Amazon Basics follows Twin" = "#d95f02", "Twin follows Amazon Basics" = "grey40")
+
+km_plot <- ggplot(km_tidy(km_all), aes(x = time, y = 1 - surv, color = follower, fill = follower)) +
+  geom_ribbon(aes(ymin = 1 - hi, ymax = 1 - lo), alpha = 0.15, color = NA) +
+  geom_step(linewidth = 1) +
+  scale_color_manual(values = col_follow) +
+  scale_fill_manual(values = col_follow) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Time-to-Response Survival Curves",
+    subtitle = "Cumulative share of products responding to competitor price changes",
+    x = "Days after Competitor Price Change",
+    y = "Share That Has Responded",
+    color = NULL, fill = NULL
+  )
+ggsave(
+  file.path(output_dir, "strategic_response_survival.png"),
+  plot = km_plot,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+# Cox Proportional Hazards Model (testing response speed between Amazon Basics and twins)
+cox_within <- coxph(Surv(time, event) ~ follower_is_ab + trig_abs + trig_down + strata(pair_id) + cluster(pair_id),
+                    data = ev_df, ties = "efron")
+
+cox_summary <- summary(cox_within)
+writeLines(
+  capture.output(print(cox_summary)),
+  file.path(output_dir, "strategic_cox_model.txt")
+)
+print(cox_summary)
