@@ -1,0 +1,33 @@
+                      m_sale_lpm     m_sale_logit        m_depth_all
+                     P(Sale) LPM    P(Sale) Logit        Depth (All)
+Dependent Var.:       is_on_sale       is_on_sale discount_depth_all
+                                                                    
+is_basics       -0.0944 (0.0908) -0.8372 (0.7615)   -0.0069 (0.0167)
+Fixed-Effects:  ---------------- ---------------- ------------------
+pair_id                      Yes              Yes                Yes
+time_bucket                  Yes              Yes                Yes
+_______________ ________________ ________________ __________________
+Family                       OLS            Logit                OLS
+S.E.: Clustered      by: pair_id      by: pair_id        by: pair_id
+Observations              17,738           16,878             17,738
+Squared Cor.             0.36511          0.38827            0.33496
+Pseudo R2                0.39423          0.35367           -0.17254
+BIC                     13,047.8         13,115.1          -48,504.1
+
+                   m_depth_cond         m_episodes
+                Depth (On Sale) Episodes (Poisson)
+Dependent Var.:  discount_depth           episodes
+                                                  
+is_basics       0.0375 (0.0248)    0.0084 (0.2823)
+Fixed-Effects:  ---------------    ---------------
+pair_id                     Yes                Yes
+time_bucket                 Yes                 No
+_______________ _______________    _______________
+Family                      OLS            Poisson
+S.E.: Clustered     by: pair_id        by: pair_id
+Observations              4,359                 40
+Squared Cor.            0.67285            0.46517
+Pseudo R2              -0.42411            0.16926
+BIC                   -15,793.0             185.08
+---
+Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
