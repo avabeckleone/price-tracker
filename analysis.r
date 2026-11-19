@@ -735,6 +735,143 @@ plot_promo_category_metric(
   function(value) sprintf("%.2f", value)
 )
 
+# Four product-level examples that make the pricing patterns visible.
+library(ggplot2)
+
+figure_pairs <- c(
+  "diaper_pail_refills",
+  "baby_wipes",
+  "car_cover",
+  "trash_bags"
+)
+figure_panel_labels <- c(
+  diaper_pail_refills = "01 | Twin on sale every day: diaper refills",
+  baby_wipes = "02 | Steady AB, erratic twin: baby wipes",
+  car_cover = "03 | AB reprices: car cover",
+  trash_bags = "04 | Twin price spike: trash bags"
+)
+figure_rows <- subset(
+  prices,
+  pair_id %in% figure_pairs &
+    !is.na(price) & price > 0 &
+    !is.na(is_basics)
+)
+figure_rows$date <- as.Date(substr(figure_rows$timestamp, 1, 10))
+figure_rows <- figure_rows[
+  order(
+    figure_rows$pair_id,
+    figure_rows$is_basics,
+    figure_rows$date,
+    figure_rows$timestamp
+  ),
+]
+# Keep one point per product and brand per day to make the timelines readable.
+figure_day_key <- paste(
+  figure_rows$pair_id,
+  figure_rows$is_basics,
+  figure_rows$date,
+  sep = "\r"
+)
+figure_rows <- figure_rows[!duplicated(figure_day_key, fromLast = TRUE), ]
+figure_rows$plot_date <- as.POSIXct(figure_rows$date, tz = "UTC")
+figure_rows$brand <- factor(
+  ifelse(figure_rows$is_basics == 1, "Amazon Basics", "Twin"),
+  levels = c("Amazon Basics", "Twin")
+)
+figure_rows$panel <- factor(
+  unname(figure_panel_labels[figure_rows$pair_id]),
+  levels = unname(figure_panel_labels)
+)
+
+# Shade a date if either listing was marked on sale that day.
+sale_by_day <- aggregate(
+  is_on_sale ~ pair_id + date,
+  data = figure_rows,
+  FUN = function(values) any(values == 1, na.rm = TRUE)
+)
+sale_days <- sale_by_day[sale_by_day$is_on_sale, ]
+sale_spans <- do.call(
+  rbind,
+  lapply(split(sale_days, sale_days$pair_id), function(days) {
+    days <- days[order(days$date), ]
+    sale_run <- cumsum(c(TRUE, diff(as.integer(days$date)) > 1))
+    do.call(
+      rbind,
+      lapply(split(days, sale_run), function(run) {
+        data.frame(
+          pair_id = run$pair_id[1],
+          xmin = as.POSIXct(min(run$date), tz = "UTC") - 12 * 60 * 60,
+          xmax = as.POSIXct(max(run$date), tz = "UTC") + 12 * 60 * 60
+        )
+      })
+    )
+  })
+)
+sale_spans$panel <- factor(
+  unname(figure_panel_labels[sale_spans$pair_id]),
+  levels = unname(figure_panel_labels)
+)
+
+pricing_personalities <- ggplot() +
+  geom_rect(
+    data = sale_spans,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    inherit.aes = FALSE,
+    fill = "#F2D58A",
+    alpha = 0.35
+  ) +
+  geom_line(
+    data = figure_rows,
+    aes(x = plot_date, y = price, color = brand, group = brand),
+    linewidth = 0.85
+  ) +
+  geom_point(
+    data = figure_rows,
+    aes(x = plot_date, y = price, color = brand),
+    size = 1.15
+  ) +
+  facet_wrap(~panel, ncol = 2, scales = "free_y") +
+  scale_color_manual(
+    values = c("Amazon Basics" = "#0072B2", "Twin" = "#D55E00")
+  ) +
+  scale_x_datetime(
+    date_breaks = "2 weeks",
+    date_labels = "%b %d",
+    expand = expansion(mult = c(0.01, 0.02))
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar(prefix = "$", accuracy = 1)
+  ) +
+  labs(
+    title = "Seeing is believing: four pricing personalities",
+    subtitle = "Daily listed prices for matched products; sale days are shaded in gold.",
+    x = NULL,
+    y = "Observed price (CAD)",
+    color = NULL,
+    caption = paste(
+      "One final observation per product per day. Gold marks days when either listing was flagged on sale.",
+      "Buy Box ownership is not available in the scrape; the twin spike is an observed listing-price change.",
+      sep = "\n"
+    )
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    panel.spacing = grid::unit(1.1, "lines"),
+    strip.text = element_text(face = "bold", hjust = 0),
+    plot.title = element_text(face = "bold", size = 16),
+    plot.caption = element_text(hjust = 0, color = "grey35")
+  )
+
+ggsave(
+  file.path(output_dir, "pricing_personalities.png"),
+  plot = pricing_personalities,
+  width = 11,
+  height = 8,
+  dpi = 300
+)
+
 # ============ PILLAR 3: STRATEGIC INTERACTION & LEADER-FOLLOWER DYNAMICS ============
 library(tidyverse)
 library(fixest)
