@@ -128,7 +128,75 @@ df_pair_gaps$pct_gap <- 100 * (
   exp(df_pair_gaps$ln_unit_baseline.1 - df_pair_gaps$ln_unit_baseline.0) - 1
 )
 df_pair_gaps <- df_pair_gaps[is.finite(df_pair_gaps$pct_gap), ]
-df_pair_gaps <- df_pair_gaps[order(df_pair_gaps$pct_gap), ]
+
+pair_categories <- c(
+  aa_batteries = "Electronics, computers & office",
+  keyboard_mouse_combo = "Electronics, computers & office",
+  led_strip = "Electronics, computers & office",
+  markers = "Electronics, computers & office",
+  staples = "Electronics, computers & office",
+  tablet_stand = "Electronics, computers & office",
+  paper_plates = "Grocery & Whole foods market",
+  baby_wipes = "Toys, kids, baby, & STEM",
+  diaper_pail_refills = "Toys, kids, baby, & STEM",
+  play_climber = "Toys, kids, baby, & STEM",
+  fabric_shaver = "Clothing, shoes, & jewellery",
+  golf_balls = "Sports & outdoors",
+  water_bottle = "Sports & outdoors",
+  car_cover = "Automotive & Industrial",
+  razor_blades = "Automotive & Industrial",
+  safety_hammer = "Automotive & Industrial",
+  cleaning_cloths = "Home, garden, pets, & tools",
+  flashlight = "Home, garden, pets, & tools",
+  picture_frames = "Home, garden, pets, & tools",
+  spatulas = "Home, garden, pets, & tools",
+  trash_bags = "Home, garden, pets, & tools"
+)
+pair_labels <- c(
+  aa_batteries = "AA batteries",
+  baby_wipes = "Baby wipes",
+  car_cover = "Car cover",
+  cleaning_cloths = "Microfiber cleaning cloths",
+  diaper_pail_refills = "Diaper pail refills",
+  fabric_shaver = "Fabric shaver",
+  flashlight = "Tactical flashlight",
+  golf_balls = "Golf balls",
+  keyboard_mouse_combo = "Keyboard + mouse combo",
+  led_strip = "Smart LED strip",
+  markers = "Permanent markers",
+  paper_plates = "Disposable paper plates",
+  picture_frames = "Picture frames",
+  play_climber = "Indoor play climber",
+  razor_blades = "Industrial scraper blades",
+  safety_hammer = "Car escape hammer",
+  spatulas = "Silicone spatula sets",
+  staples = "Staples",
+  tablet_stand = "Tablet stand",
+  trash_bags = "Kitchen trash bags",
+  water_bottle = "Insulated sport bottle"
+)
+category_order <- c(
+  "Electronics, computers & office",
+  "Grocery & Whole foods market",
+  "Toys, kids, baby, & STEM",
+  "Clothing, shoes, & jewellery",
+  "Sports & outdoors",
+  "Automotive & Industrial",
+  "Home, garden, pets, & tools"
+)
+unmapped_pairs <- setdiff(as.character(df_pair_gaps$pair_id), names(pair_categories))
+if (length(unmapped_pairs)) {
+  stop("Baseline price chart has uncategorized pairs: ",
+       paste(unmapped_pairs, collapse = ", "))
+}
+df_pair_gaps$category <- unname(pair_categories[df_pair_gaps$pair_id])
+df_pair_gaps$item_label <- unname(pair_labels[df_pair_gaps$pair_id])
+if (anyNA(df_pair_gaps$item_label)) {
+  stop("Baseline price chart is missing a display label for one or more pairs.")
+}
+df_pair_gaps <- df_pair_gaps[
+  order(match(df_pair_gaps$category, category_order), df_pair_gaps$pct_gap),
+]
 
 write.csv(
   df_pair_gaps,
@@ -136,58 +204,88 @@ write.csv(
   row.names = FALSE
 )
 
+present_categories <- category_order[category_order %in% df_pair_gaps$category]
+category_colors <- setNames(
+  grDevices::hcl.colors(length(present_categories), palette = "Dark 3"),
+  present_categories
+)
+category_summary <- aggregate(
+  pct_gap ~ category,
+  data = df_pair_gaps,
+  FUN = median
+)
+category_summary <- category_summary[
+  match(present_categories, category_summary$category),
+]
+category_positions <- seq_len(nrow(category_summary))
+plot_range <- range(c(0, category_summary$pct_gap))
+plot_padding <- max(diff(plot_range) * 0.05, 5)
+plot_xlim <- c(plot_range[1] - plot_padding, plot_range[2] + plot_padding)
+cheaper_category_count <- sum(category_summary$pct_gap < 0)
+
 png(
   file.path(output_dir, "baseline_price_gaps.png"),
-  width = 1600,
+  width = 1800,
   height = 1000,
   res = 150
 )
-pair_colors <- setNames(
-  grDevices::hcl.colors(length(unique(df_pair_gaps$pair_id)), palette = "Dark 3"),
-  sort(unique(df_pair_gaps$pair_id))
-)
-pair_index <- 100 + df_pair_gaps$pct_gap
-plot_range <- range(c(0, 100, pair_index))
-plot_padding <- max(diff(plot_range) * 0.05, 5)
-par(mar = c(5, 12, 4, 2) + 0.1)
+par(mar = c(5, 20, 5, 4) + 0.1)
 plot(
-  pair_index,
-  seq_len(nrow(df_pair_gaps)),
-  xlim = c(plot_range[1] - plot_padding, plot_range[2] + plot_padding),
-  ylim = c(0.5, nrow(df_pair_gaps) + 0.5),
-  pch = 17,
-  cex = 1.2,
-  col = pair_colors[df_pair_gaps$pair_id],
+  category_summary$pct_gap,
+  category_positions,
+  type = "n",
+  xlim = plot_xlim,
+  ylim = c(nrow(category_summary) + 0.5, 0.5),
   yaxt = "n",
-  xlab = "Baseline unit price index (matched twin = 100)",
+  xlab = "Median baseline unit-price gap vs. matched product (%)",
   ylab = "",
-  main = "Baseline Unit Price by Matched Pair",
-  sub = "Circle = matched twin; triangle = Amazon Basics. Same-color points belong to the same pair."
+  main = sprintf(
+    "Amazon Basics has lower median prices in %d of %d categories",
+    cheaper_category_count,
+    nrow(category_summary)
+  ),
+  sub = "Each bar shows the category median; negative gaps mean Amazon Basics is cheaper."
 )
-grid(nx = NA, ny = NULL, col = "grey90")
-abline(v = 100, lty = 2, lwd = 1.5, col = "grey40")
-for (i in seq_len(nrow(df_pair_gaps))) {
-  pair_color <- pair_colors[df_pair_gaps$pair_id[i]]
+grid(nx = NULL, ny = NA, col = "grey90")
+abline(v = 0, lty = 2, lwd = 1.5, col = "grey40")
+axis(
+  2,
+  at = category_positions,
+  labels = category_summary$category,
+  las = 1,
+  tick = FALSE,
+  cex.axis = 0.9
+)
+for (i in seq_len(nrow(category_summary))) {
+  category <- category_summary$category[i]
+  category_gap <- category_summary$pct_gap[i]
+  category_color <- category_colors[category]
   segments(
-    x0 = 100,
-    y0 = i,
-    x1 = pair_index[i],
-    y1 = i,
-    col = pair_color,
-    lwd = 2
+    x0 = 0,
+    y0 = category_positions[i],
+    x1 = category_gap,
+    y1 = category_positions[i],
+    col = category_color,
+    lwd = 8,
+    lend = "butt"
   )
-  points(100, i, pch = 16, cex = 1.2, col = pair_color)
-  points(pair_index[i], i, pch = 17, cex = 1.2, col = pair_color)
+  points(
+    category_gap,
+    category_positions[i],
+    pch = 21,
+    cex = 1.4,
+    col = category_color,
+    bg = category_color
+  )
   text(
-    pair_index[i],
-    i,
-    labels = sprintf("%+.1f%%", df_pair_gaps$pct_gap[i]),
-    pos = if (pair_index[i] >= 100) 4 else 2,
-    offset = 0.7,
-    cex = 0.8
+    category_gap,
+    category_positions[i],
+    labels = sprintf("%+.1f%%", category_gap),
+    pos = if (category_gap >= 0) 4 else 2,
+    offset = 0.6,
+    cex = 0.9
   )
 }
-axis(2, at = seq_len(nrow(df_pair_gaps)), labels = df_pair_gaps$pair_id, las = 1)
 dev.off()
 
 # Promotional analysis uses columns that exist in prices_clean.csv.
