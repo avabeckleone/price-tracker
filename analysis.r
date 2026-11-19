@@ -487,7 +487,7 @@ promo_category_summary$interpretation <- vapply(
           is.na(promo_category_summary$twin_depth_if_sale[i])) {
         "No sales for either brand"
       } else if (is.na(promo_category_summary$basics_depth_if_sale[i])) {
-        "No AB sales"
+        "No Amazon Basics sales"
       } else {
         "No twin sales"
       }
@@ -540,20 +540,19 @@ text(
 text(
   0.5,
   0.925,
-  "Means across matched products. Frequency = % of observed days on sale; depth = average discount on sale days. Last column is AB minus Twin; pp = percentage points (AB = Amazon Basics).",
+  "Means across matched products. Frequency = % of observed days on sale; depth = average discount on sale days. Last column is Amazon Basics minus Twin; pp = percentage points.",
   cex = 0.88
 )
 text(0.025, 0.865, "Category", adj = 0, font = 2, cex = 1.02)
-text(0.292, 0.865, "Pairs", font = 2, cex = 1.02)
 text(0.43, 0.865, "On-sale frequency", font = 2, cex = 1.02)
 text(0.64, 0.865, "Discount depth", font = 2, cex = 1.02)
-text(0.78, 0.865, "What it means for AB", adj = 0, font = 2, cex = 1.02)
+text(0.78, 0.865, "What it means for Amazon Basics", adj = 0, font = 2, cex = 1.02)
 twin_color <- "grey25"
 basics_color <- "#0072B2"
-text(0.385, 0.83, "Twin", col = twin_color, font = 2, cex = 0.9)
-text(0.485, 0.83, "AB", col = basics_color, font = 2, cex = 0.9)
-text(0.59, 0.83, "Twin", col = twin_color, font = 2, cex = 0.9)
-text(0.69, 0.83, "AB", col = basics_color, font = 2, cex = 0.9)
+text(0.385, 0.83, "3P Twin", col = twin_color, font = 2, cex = 0.9)
+text(0.485, 0.83, "Amazon Basics", col = basics_color, font = 2, cex = 0.9)
+text(0.59, 0.83, "3P Twin", col = twin_color, font = 2, cex = 0.9)
+text(0.69, 0.83, "Amazon Basics", col = basics_color, font = 2, cex = 0.9)
 text(0.64, 0.805, "(sale days only; n with sales)", cex = 0.72)
 abline(h = 0.79, col = "grey45")
 row_positions <- seq(0.75, 0.21, length.out = nrow(promo_category_summary))
@@ -569,7 +568,6 @@ for (i in seq_len(nrow(promo_category_summary))) {
     border = NA
   )
   text(0.025, y, row$category, adj = 0, cex = 0.92)
-  text(0.292, y, row$matched_pairs, cex = 0.95)
   text(0.385, y, format_percent(row$twin_sale_share), col = twin_color, cex = 0.95)
   text(0.485, y, format_percent(row$basics_sale_share), col = basics_color, cex = 0.95)
   text(
