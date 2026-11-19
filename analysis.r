@@ -430,73 +430,188 @@ writeLines(
 irr_episodes <- exp(coef(m_episodes)["is_basics"])
 cat("Sale Episodes Incidence Rate Ratio (AB / Twin):", round(irr_episodes, 2), "\n")
 
-# Slope charts use pair_id for identity and color; category is not in this CSV.
-plot_pair_slope <- function(data, metric_col, y_label, plot_title, file_name) {
-  pair_ids <- sort(unique(data$pair_id))
-  colors <- setNames(
-    grDevices::hcl.colors(length(pair_ids), palette = "Dark 3"),
-    pair_ids
-  )
-  png(file.path(output_dir, file_name), width = 1600, height = 900, res = 150)
-  layout(matrix(c(1, 2), nrow = 1), widths = c(3.5, 1.5))
-  par(mar = c(5, 5, 4, 1) + 0.1)
-  values <- data[[metric_col]]
-  finite_values <- values[is.finite(values)]
-  plot_range <- if (length(finite_values)) {
-    range(finite_values)
-  } else {
-    c(0, 1)
-  }
-  if (diff(plot_range) == 0) plot_range <- plot_range + c(-0.5, 0.5)
-  plot(
-    c(1, 2),
-    plot_range,
-    type = "n",
-    xaxt = "n",
-    xlim = c(0.8, 2.2),
-    ylim = plot_range,
-    xlab = "",
-    ylab = y_label,
-    main = plot_title
-  )
-  axis(1, at = c(1, 2), labels = c("3P Twin", "Amazon Basics"))
-  grid(nx = NA, ny = NULL, col = "grey90")
-  for (pair in pair_ids) {
-    pair_rows <- data[data$pair_id == pair, ]
-    pair_rows <- pair_rows[order(pair_rows$is_basics), ]
-    pair_values <- pair_rows[[metric_col]]
-    if (nrow(pair_rows) == 2 && all(is.finite(pair_values))) {
-      lines(c(1, 2), pair_values, col = colors[pair], lwd = 1.5)
-      points(c(1, 2), pair_values, col = colors[pair], pch = 19)
-    }
-  }
-  par(mar = c(0, 0, 0, 0))
-  plot.new()
-  legend(
-    "center",
-    legend = pair_ids,
-    col = colors[pair_ids],
-    lty = 1,
-    pch = 19,
-    cex = 0.8,
-    bty = "n",
-    title = "Matched pair"
-  )
-  dev.off()
+unmapped_promo_pairs <- setdiff(unique(df_item_sales$pair_id), names(pair_categories))
+if (length(unmapped_promo_pairs)) {
+  stop("Promotional summary has uncategorized pairs: ",
+       paste(unmapped_promo_pairs, collapse = ", "))
 }
+df_item_sales$category <- unname(pair_categories[df_item_sales$pair_id])
+present_promo_categories <- category_order[
+  category_order %in% df_item_sales$category
+]
+mean_or_na <- function(values) {
+  values <- values[is.finite(values)]
+  if (length(values)) mean(values) else NA_real_
+}
+promo_category_summary <- do.call(
+  rbind,
+  lapply(present_promo_categories, function(category) {
+    category_rows <- df_item_sales[df_item_sales$category == category, ]
+    twin_rows <- category_rows[category_rows$is_basics == 0, ]
+    basics_rows <- category_rows[category_rows$is_basics == 1, ]
+    data.frame(
+      category = category,
+      matched_pairs = length(unique(category_rows$pair_id)),
+      twin_pairs_with_sales = sum(is.finite(twin_rows$depth_if_sale)),
+      basics_pairs_with_sales = sum(is.finite(basics_rows$depth_if_sale)),
+      twin_sale_share = mean(twin_rows$sale_share),
+      basics_sale_share = mean(basics_rows$sale_share),
+      twin_depth_if_sale = mean_or_na(twin_rows$depth_if_sale),
+      basics_depth_if_sale = mean_or_na(basics_rows$depth_if_sale),
+      stringsAsFactors = FALSE
+    )
+  })
+)
+promo_category_summary$frequency_diff_pp <- 100 * (
+  promo_category_summary$basics_sale_share -
+    promo_category_summary$twin_sale_share
+)
+promo_category_summary$depth_diff_pp <- 100 * (
+  promo_category_summary$basics_depth_if_sale -
+    promo_category_summary$twin_depth_if_sale
+)
+promo_category_summary$interpretation <- vapply(
+  seq_len(nrow(promo_category_summary)),
+  function(i) {
+    frequency_diff <- promo_category_summary$frequency_diff_pp[i]
+    depth_diff <- promo_category_summary$depth_diff_pp[i]
+    frequency_text <- if (frequency_diff > 0.05) {
+      sprintf("More often (+%.1f pp)", frequency_diff)
+    } else if (frequency_diff < -0.05) {
+      sprintf("Less often (%.1f pp)", frequency_diff)
+    } else {
+      sprintf("Similar frequency (%+.1f pp)", frequency_diff)
+    }
+    depth_text <- if (is.na(depth_diff)) {
+      if (is.na(promo_category_summary$basics_depth_if_sale[i]) &&
+          is.na(promo_category_summary$twin_depth_if_sale[i])) {
+        "No sales for either brand"
+      } else if (is.na(promo_category_summary$basics_depth_if_sale[i])) {
+        "No AB sales"
+      } else {
+        "No twin sales"
+      }
+    } else if (depth_diff > 0.05) {
+      sprintf("Deeper cuts (+%.1f pp)", depth_diff)
+    } else if (depth_diff < -0.05) {
+      sprintf("Shallower cuts (%.1f pp)", depth_diff)
+    } else {
+      sprintf("Similar depth (%+.1f pp)", depth_diff)
+    }
+    paste(frequency_text, depth_text, sep = "; ")
+  },
+  character(1)
+)
+write.csv(
+  promo_category_summary,
+  file.path(output_dir, "promotional_category_summary.csv"),
+  row.names = FALSE
+)
 
-plot_pair_slope(
-  df_item_sales, "sale_share", "Share of Observed Days on Sale",
-  "Promotional Frequency by Pair", "promotional_frequency.png"
+format_percent <- function(value) {
+  if (is.finite(value)) sprintf("%.1f%%", 100 * value) else "n/a"
+}
+png(
+  file.path(output_dir, "promotional_category_summary.png"),
+  width = 2200,
+  height = 1300,
+  res = 150
 )
-plot_pair_slope(
-  df_item_sales, "depth_if_sale", "Average Discount Depth When on Sale",
-  "Promotional Depth by Pair", "promotional_depth.png"
+par(mar = c(0.2, 0.2, 0.2, 0.2))
+plot(
+  0,
+  0,
+  type = "n",
+  xlim = c(0, 1),
+  ylim = c(0, 1),
+  xaxs = "i",
+  yaxs = "i",
+  axes = FALSE,
+  xlab = "",
+  ylab = ""
 )
-plot_pair_slope(
-  df_item_sales, "ep_per_30", "Sale Episodes per 30 Observed Days",
-  "Promotional Episode Cadence by Pair", "promotional_episodes.png"
+text(
+  0.5,
+  0.965,
+  "Promotional patterns by product category",
+  cex = 1.55,
+  font = 2
 )
+text(
+  0.5,
+  0.925,
+  "Means across matched products. Frequency = % of observed days on sale; depth = average discount on sale days. Last column is AB minus Twin; pp = percentage points (AB = Amazon Basics).",
+  cex = 0.88
+)
+text(0.025, 0.865, "Category", adj = 0, font = 2, cex = 1.02)
+text(0.292, 0.865, "Pairs", font = 2, cex = 1.02)
+text(0.43, 0.865, "On-sale frequency", font = 2, cex = 1.02)
+text(0.64, 0.865, "Discount depth", font = 2, cex = 1.02)
+text(0.78, 0.865, "What it means for AB", adj = 0, font = 2, cex = 1.02)
+twin_color <- "grey25"
+basics_color <- "#0072B2"
+text(0.385, 0.83, "Twin", col = twin_color, font = 2, cex = 0.9)
+text(0.485, 0.83, "AB", col = basics_color, font = 2, cex = 0.9)
+text(0.59, 0.83, "Twin", col = twin_color, font = 2, cex = 0.9)
+text(0.69, 0.83, "AB", col = basics_color, font = 2, cex = 0.9)
+text(0.64, 0.805, "(sale days only; n with sales)", cex = 0.72)
+abline(h = 0.79, col = "grey45")
+row_positions <- seq(0.75, 0.21, length.out = nrow(promo_category_summary))
+for (i in seq_len(nrow(promo_category_summary))) {
+  row <- promo_category_summary[i, ]
+  y <- row_positions[i]
+  rect(
+    0.015,
+    y - 0.037,
+    0.985,
+    y + 0.037,
+    col = if (i %% 2) "grey96" else "white",
+    border = NA
+  )
+  text(0.025, y, row$category, adj = 0, cex = 0.92)
+  text(0.292, y, row$matched_pairs, cex = 0.95)
+  text(0.385, y, format_percent(row$twin_sale_share), col = twin_color, cex = 0.95)
+  text(0.485, y, format_percent(row$basics_sale_share), col = basics_color, cex = 0.95)
+  text(
+    0.59,
+    y,
+    sprintf(
+      "%s (%d)",
+      format_percent(row$twin_depth_if_sale),
+      row$twin_pairs_with_sales
+    ),
+    col = twin_color,
+    cex = 0.88
+  )
+  text(
+    0.69,
+    y,
+    sprintf(
+      "%s (%d)",
+      format_percent(row$basics_depth_if_sale),
+      row$basics_pairs_with_sales
+    ),
+    col = basics_color,
+    cex = 0.88
+  )
+  text(0.78, y, row$interpretation, adj = 0, cex = 0.88)
+}
+text(
+  0.025,
+  0.095,
+  "Depth averages exclude products with no observed sales; n with sales is shown in parentheses.",
+  adj = 0,
+  cex = 0.85
+)
+text(
+  0.025,
+  0.06,
+  "Frequency and depth are category averages across matched pairs; they describe this sample, not every Amazon product.",
+  adj = 0,
+  cex = 0.8,
+  col = "grey35"
+)
+dev.off()
 
 # ============ PILLAR 3: STRATEGIC INTERACTION & LEADER-FOLLOWER DYNAMICS ============
 library(tidyverse)
