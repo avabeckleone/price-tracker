@@ -439,6 +439,222 @@ df_item_sales$category <- unname(pair_categories[df_item_sales$pair_id])
 present_promo_categories <- category_order[
   category_order %in% df_item_sales$category
 ]
+
+# Pair-level sticker-price versus promotion-frequency substitution analysis.
+# Both sale rates use only calendar days observed for both products in a pair.
+promo_story_daily <- promo_rows[
+  !duplicated(promo_rows[c("asin", "time_bucket")], fromLast = TRUE),
+  c("pair_id", "is_basics", "time_bucket", "is_on_sale")
+]
+promo_story_pair_days <- reshape(
+  promo_story_daily,
+  idvar = c("pair_id", "time_bucket"),
+  timevar = "is_basics",
+  direction = "wide"
+)
+promo_story_pair_days <- subset(
+  promo_story_pair_days,
+  !is.na(is_on_sale.0) & !is.na(is_on_sale.1)
+)
+promo_story_frequency <- do.call(
+  rbind,
+  lapply(
+    split(promo_story_pair_days, promo_story_pair_days$pair_id),
+    function(pair_days) {
+      data.frame(
+        pair_id = pair_days$pair_id[1],
+        matched_days = nrow(pair_days),
+        twin_sale_share = mean(pair_days$is_on_sale.0),
+        basics_sale_share = mean(pair_days$is_on_sale.1)
+      )
+    }
+  )
+)
+promo_story_frequency$frequency_gap_pp <- 100 * (
+  promo_story_frequency$twin_sale_share -
+    promo_story_frequency$basics_sale_share
+)
+
+sticker_price_sales <- merge(
+  df_pair_gaps[
+    ,
+    c(
+      "pair_id", "ln_unit_baseline.0", "ln_unit_baseline.1",
+      "category", "item_label"
+    )
+  ],
+  promo_story_frequency,
+  by = "pair_id"
+)
+sticker_price_sales$baseline_price_advantage_pct <- 100 * (
+  1 - exp(
+    sticker_price_sales$ln_unit_baseline.1 -
+      sticker_price_sales$ln_unit_baseline.0
+  )
+)
+sticker_price_sales$baseline_price_advantage_10pp <-
+  sticker_price_sales$baseline_price_advantage_pct / 10
+sticker_price_sales <- sticker_price_sales[
+  is.finite(sticker_price_sales$baseline_price_advantage_10pp) &
+    is.finite(sticker_price_sales$frequency_gap_pp),
+]
+sticker_price_sales <- sticker_price_sales[
+  order(match(sticker_price_sales$category, category_order), sticker_price_sales$pair_id),
+]
+
+sticker_price_sales_model <- lm(
+  frequency_gap_pp ~ baseline_price_advantage_10pp,
+  data = sticker_price_sales
+)
+sticker_price_sales_vcov <- sandwich::vcovHC(
+  sticker_price_sales_model,
+  type = "HC3"
+)
+sticker_price_sales_term <- "baseline_price_advantage_10pp"
+sticker_price_sales_estimate <- unname(
+  coef(sticker_price_sales_model)[sticker_price_sales_term]
+)
+sticker_price_sales_se <- sqrt(
+  sticker_price_sales_vcov[sticker_price_sales_term, sticker_price_sales_term]
+)
+sticker_price_sales_df <- df.residual(sticker_price_sales_model)
+sticker_price_sales_critical <- qt(0.975, df = sticker_price_sales_df)
+sticker_price_sales_ci <- sticker_price_sales_estimate +
+  c(-1, 1) * sticker_price_sales_critical * sticker_price_sales_se
+sticker_price_sales_t <- sticker_price_sales_estimate / sticker_price_sales_se
+sticker_price_sales_p <- 2 * pt(
+  abs(sticker_price_sales_t),
+  df = sticker_price_sales_df,
+  lower.tail = FALSE
+)
+
+write.csv(
+  sticker_price_sales,
+  file.path(output_dir, "sticker_price_sales_pairs.csv"),
+  row.names = FALSE
+)
+writeLines(
+  c(
+    "Sticker price versus promotional frequency",
+    "",
+    sprintf("Matched product pairs: %d.", nrow(sticker_price_sales)),
+    sprintf(
+      "Outcome: twin minus Amazon Basics sale frequency, in percentage points, computed over matched observed days (median matched days per pair: %d).",
+      as.integer(median(sticker_price_sales$matched_days))
+    ),
+    "Predictor: Amazon Basics baseline-price advantage, in 10-percentage-point increments; positive values mean Basics has a lower baseline price.",
+    "Model: pair-level ordinary least squares with HC3 heteroskedasticity-robust standard errors.",
+    sprintf(
+      "Estimated slope: %.2f percentage points per 10-point baseline-price advantage (95%% CI %.2f to %.2f; p = %.3f; R-squared = %.3f).",
+      sticker_price_sales_estimate,
+      sticker_price_sales_ci[1],
+      sticker_price_sales_ci[2],
+      sticker_price_sales_p,
+      summary(sticker_price_sales_model)$r.squared
+    ),
+    "A positive slope is consistent with lower Basics sticker prices substituting for promotions; this observational association does not establish causality.",
+    "Points are colored by category for description only; the model does not adjust for category because several categories contain very few pairs."
+  ),
+  file.path(output_dir, "sticker_price_sales_model.txt")
+)
+
+sticker_price_x <- sticker_price_sales$baseline_price_advantage_pct
+sticker_price_y <- sticker_price_sales$frequency_gap_pp
+sticker_price_grid <- seq(
+  min(sticker_price_x),
+  max(sticker_price_x),
+  length.out = 100
+)
+sticker_price_newdata <- data.frame(
+  baseline_price_advantage_10pp = sticker_price_grid / 10
+)
+sticker_price_fit <- as.numeric(
+  predict(sticker_price_sales_model, newdata = sticker_price_newdata)
+)
+sticker_price_design <- model.matrix(
+  ~ baseline_price_advantage_10pp,
+  data = sticker_price_newdata
+)
+sticker_price_fit_se <- sqrt(
+  pmax(
+    0,
+    rowSums((sticker_price_design %*% sticker_price_sales_vcov) *
+      sticker_price_design)
+  )
+)
+sticker_price_fit_half_width <- sticker_price_sales_critical *
+  sticker_price_fit_se
+story_categories <- category_order[
+  category_order %in% sticker_price_sales$category
+]
+story_category_labels <- c(
+  "Electronics, computers & office" = "Electronics / office",
+  "Grocery & Whole foods market" = "Grocery / Whole foods",
+  "Toys, kids, baby, & STEM" = "Toys / kids / STEM",
+  "Clothing, shoes, & jewellery" = "Clothing",
+  "Sports & outdoors" = "Sports / outdoors",
+  "Automotive & Industrial" = "Automotive / industrial",
+  "Home, garden, pets, & tools" = "Home / garden / tools"
+)
+png(
+  file.path(output_dir, "sticker_price_vs_sales.png"),
+  width = 2200,
+  height = 1400,
+  res = 160
+)
+par(mar = c(5.5, 6.5, 5, 19) + 0.1, xpd = NA)
+plot(
+  sticker_price_x,
+  sticker_price_y,
+  type = "n",
+  xlim = range(c(sticker_price_x, 0)),
+  ylim = range(c(sticker_price_y, 0)),
+  xlab = "Amazon Basics baseline-price advantage (% cheaper than matched twin)",
+  ylab = "Twin minus Amazon Basics sale frequency (percentage points)",
+  main = "Sticker price versus promotional frequency",
+  cex.lab = 1.05
+)
+grid(col = "grey90")
+abline(h = 0, v = 0, col = "grey55", lty = 2)
+polygon(
+  c(sticker_price_grid, rev(sticker_price_grid)),
+  c(
+    sticker_price_fit - sticker_price_fit_half_width,
+    rev(sticker_price_fit + sticker_price_fit_half_width)
+  ),
+  col = grDevices::adjustcolor("grey35", alpha.f = 0.18),
+  border = NA
+)
+lines(sticker_price_grid, sticker_price_fit, col = "grey25", lwd = 2)
+points(
+  sticker_price_x,
+  sticker_price_y,
+  pch = 21,
+  bg = unname(category_colors[as.character(sticker_price_sales$category)]),
+  col = "grey15",
+  cex = 1.25
+)
+mtext(
+  "Each point is one matched pair; positive x = Basics is cheaper, positive y = Basics is promoted less.",
+  side = 3,
+  line = 0.5,
+  cex = 0.88
+)
+legend(
+  x = par("usr")[2] + 0.04 * diff(par("usr")[1:2]),
+  y = par("usr")[4],
+  title = "Product category",
+  legend = unname(story_category_labels[story_categories]),
+  pch = 21,
+  pt.bg = unname(category_colors[story_categories]),
+  col = "grey15",
+  xjust = 0,
+  yjust = 1,
+  bty = "n",
+  cex = 0.88
+)
+dev.off()
+
 mean_or_na <- function(values) {
   values <- values[is.finite(values)]
   if (length(values)) mean(values) else NA_real_

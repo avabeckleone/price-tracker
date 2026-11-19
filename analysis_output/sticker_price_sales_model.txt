@@ -1,0 +1,9 @@
+Sticker price versus promotional frequency
+
+Matched product pairs: 21.
+Outcome: twin minus Amazon Basics sale frequency, in percentage points, computed over matched observed days (median matched days per pair: 45).
+Predictor: Amazon Basics baseline-price advantage, in 10-percentage-point increments; positive values mean Basics has a lower baseline price.
+Model: pair-level ordinary least squares with HC3 heteroskedasticity-robust standard errors.
+Estimated slope: 2.88 percentage points per 10-point baseline-price advantage (95% CI -0.55 to 6.31; p = 0.095; R-squared = 0.097).
+A positive slope is consistent with lower Basics sticker prices substituting for promotions; this observational association does not establish causality.
+Points are colored by category for description only; the model does not adjust for category because several categories contain very few pairs.

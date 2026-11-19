@@ -1,3 +1,3 @@
 # price-tracker
 
-The analysis script generates `analysis_output/pricing_personalities.png`, a four-panel view of daily Amazon Basics and matched-twin prices with sale days shaded.
+The analysis script generates `analysis_output/pricing_personalities.png`, a four-panel view of daily Amazon Basics and matched-twin prices with sale days shaded. It also compares Amazon Basics' baseline-price advantage with its relative sale frequency per matched product pair in `analysis_output/sticker_price_vs_sales.png`, with pair-level data and model results in `analysis_output/sticker_price_sales_pairs.csv` and `analysis_output/sticker_price_sales_model.txt`.
