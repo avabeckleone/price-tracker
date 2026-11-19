@@ -458,6 +458,8 @@ promo_category_summary <- do.call(
       basics_sale_share = mean(basics_rows$sale_share),
       twin_depth_if_sale = mean_or_na(twin_rows$depth_if_sale),
       basics_depth_if_sale = mean_or_na(basics_rows$depth_if_sale),
+      twin_ep_per_30 = mean(twin_rows$ep_per_30),
+      basics_ep_per_30 = mean(basics_rows$ep_per_30),
       stringsAsFactors = FALSE
     )
   })
@@ -610,6 +612,128 @@ text(
   col = "grey35"
 )
 dev.off()
+
+plot_promo_category_metric <- function(
+  data,
+  twin_col,
+  basics_col,
+  x_label,
+  plot_title,
+  file_name,
+  scale_factor,
+  value_format
+) {
+  twin_values <- data[[twin_col]] * scale_factor
+  basics_values <- data[[basics_col]] * scale_factor
+  finite_values <- c(twin_values, basics_values)
+  finite_values <- finite_values[is.finite(finite_values)]
+  x_max <- if (length(finite_values)) max(finite_values) * 1.35 else 1
+  if (x_max <= 0) x_max <- 1
+  x_ticks <- pretty(c(0, x_max), n = 5)
+  x_ticks <- x_ticks[x_ticks >= 0 & x_ticks <= x_max]
+  category_y <- rev(seq_len(nrow(data)))
+
+  png(file.path(output_dir, file_name), width = 1800, height = 1100, res = 150)
+  par(mar = c(5, 23, 5, 3) + 0.1)
+  plot(
+    c(twin_values, basics_values),
+    rep(category_y, 2),
+    type = "n",
+    xlim = c(0, x_max),
+    ylim = c(0.5, nrow(data) + 0.5),
+    xaxt = "n",
+    yaxt = "n",
+    xlab = x_label,
+    ylab = "",
+    main = plot_title,
+    sub = "Category means; grey = 3P Twin, blue = Amazon Basics."
+  )
+  axis(1, at = x_ticks)
+  axis(2, at = category_y, labels = data$category, las = 1, tick = FALSE)
+  grid(nx = NULL, ny = NA, col = "grey90")
+  abline(v = 0, col = "grey70")
+  twin_y <- category_y + 0.16
+  basics_y <- category_y - 0.16
+  for (i in seq_len(nrow(data))) {
+    if (is.finite(twin_values[i])) {
+      segments(0, twin_y[i], twin_values[i], twin_y[i], col = twin_color, lwd = 4)
+      points(twin_values[i], twin_y[i], pch = 17, col = twin_color)
+      text(
+        twin_values[i],
+        twin_y[i],
+        labels = value_format(twin_values[i]),
+        pos = 4,
+        offset = 0.45,
+        cex = 0.78,
+        col = twin_color
+      )
+    } else {
+      text(
+        0,
+        twin_y[i],
+        labels = "No sales",
+        pos = 4,
+        offset = 0.45,
+        cex = 0.78,
+        col = twin_color
+      )
+    }
+    if (is.finite(basics_values[i])) {
+      segments(0, basics_y[i], basics_values[i], basics_y[i], col = basics_color, lwd = 4)
+      points(basics_values[i], basics_y[i], pch = 19, col = basics_color)
+      text(
+        basics_values[i],
+        basics_y[i],
+        labels = value_format(basics_values[i]),
+        pos = 4,
+        offset = 0.45,
+        cex = 0.78,
+        col = basics_color
+      )
+    } else {
+      text(
+        0,
+        basics_y[i],
+        labels = "No sales",
+        pos = 4,
+        offset = 0.45,
+        cex = 0.78,
+        col = basics_color
+      )
+    }
+  }
+  dev.off()
+}
+plot_promo_category_metric(
+  promo_category_summary,
+  "twin_sale_share",
+  "basics_sale_share",
+  "Mean share of observed days on sale (%)",
+  "Promotional frequency by category",
+  "promotional_frequency.png",
+  100,
+  function(value) sprintf("%.1f%%", value)
+)
+plot_promo_category_metric(
+  promo_category_summary,
+  "twin_depth_if_sale",
+  "basics_depth_if_sale",
+  "Mean discount depth when on sale (%)",
+  "Promotional depth by category",
+  "promotional_depth.png",
+  100,
+  function(value) sprintf("%.1f%%", value)
+)
+plot_promo_category_metric(
+  promo_category_summary,
+  "twin_ep_per_30",
+  "basics_ep_per_30",
+  "Mean sale episodes per 30 observed days",
+  "Promotional episodes by category",
+  "promotional_episodes.png",
+  1,
+  function(value) sprintf("%.2f", value)
+)
 
 # ============ PILLAR 3: STRATEGIC INTERACTION & LEADER-FOLLOWER DYNAMICS ============
 library(tidyverse)
