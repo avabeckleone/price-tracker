@@ -655,6 +655,233 @@ legend(
 )
 dev.off()
 
+# Descriptive pricing-mechanism indicators from observed price changes.
+# Change times are first-detection timestamps; actual changes occur between scrapes.
+mechanism_rows <- subset(
+  prices,
+  !is.na(pair_id) & !is.na(is_basics) &
+    is.finite(price) & price > 0 & !is.na(timestamp)
+)
+mechanism_rows$observed_at <- as.POSIXct(
+  mechanism_rows$timestamp,
+  format = "%Y-%m-%d %H:%M:%S",
+  tz = "America/Toronto"
+)
+mechanism_rows <- mechanism_rows[!is.na(mechanism_rows$observed_at), ]
+mechanism_rows <- mechanism_rows[
+  order(mechanism_rows$asin, mechanism_rows$observed_at),
+]
+mechanism_rows$previous_price <- NA_real_
+mechanism_rows$previous_observed_at <- as.POSIXct(
+  NA,
+  origin = "1970-01-01",
+  tz = "America/Toronto"
+)
+for (asin_rows in split(seq_len(nrow(mechanism_rows)), mechanism_rows$asin)) {
+  if (length(asin_rows) > 1) {
+    current_rows <- asin_rows[-1]
+    previous_rows <- asin_rows[-length(asin_rows)]
+    mechanism_rows$previous_price[current_rows] <-
+      mechanism_rows$price[previous_rows]
+    mechanism_rows$previous_observed_at[current_rows] <-
+      mechanism_rows$observed_at[previous_rows]
+  }
+}
+mechanism_changes <- subset(
+  mechanism_rows,
+  !is.na(previous_price) &
+    round(price * 100) != round(previous_price * 100)
+)
+mechanism_changes$recorded_hour <- as.integer(
+  format(mechanism_changes$observed_at, "%H", tz = "America/Toronto")
+)
+mechanism_changes$weekday <- as.integer(
+  format(mechanism_changes$observed_at, "%u", tz = "America/Toronto")
+)
+mechanism_changes$ending_cents <- as.integer(round(mechanism_changes$price * 100) %% 100)
+mechanism_changes$hours_since_previous_observation <- as.numeric(difftime(
+  mechanism_changes$observed_at,
+  mechanism_changes$previous_observed_at,
+  units = "hours"
+))
+mechanism_brands <- c(0, 1)
+mechanism_brand_labels <- c("3P Twin", "Amazon Basics")
+mechanism_brand_colors <- c("grey35", "#0072B2")
+
+mechanism_brand_summary <- do.call(
+  rbind,
+  lapply(seq_along(mechanism_brands), function(i) {
+    brand_rows <- mechanism_changes[
+      mechanism_changes$is_basics == mechanism_brands[i],
+    ]
+    data.frame(
+      brand = mechanism_brand_labels[i],
+      products_with_changes = length(unique(brand_rows$asin)),
+      detected_price_changes = nrow(brand_rows),
+      endings_99 = sum(brand_rows$ending_cents == 99),
+      endings_99_pct = 100 * mean(brand_rows$ending_cents == 99),
+      median_observation_interval_hours = median(
+        brand_rows$hours_since_previous_observation
+      ),
+      stringsAsFactors = FALSE
+    )
+  })
+)
+write.csv(
+  mechanism_brand_summary,
+  file.path(output_dir, "mechanism_price_change_summary.csv"),
+  row.names = FALSE
+)
+
+hour_counts <- table(
+  factor(mechanism_changes$recorded_hour, levels = 0:23),
+  factor(mechanism_changes$is_basics, levels = mechanism_brands)
+)
+hour_share_pct <- sweep(hour_counts, 2, colSums(hour_counts), "/") * 100
+weekday_counts <- table(
+  factor(mechanism_changes$weekday, levels = 1:7),
+  factor(mechanism_changes$is_basics, levels = mechanism_brands)
+)
+weekday_share_pct <- sweep(weekday_counts, 2, colSums(weekday_counts), "/") * 100
+
+png(
+  file.path(output_dir, "mechanism_change_timing.png"),
+  width = 2000,
+  height = 1300,
+  res = 160
+)
+par(mfrow = c(2, 1), mar = c(5, 5, 4, 2) + 0.1, oma = c(0, 0, 2, 0))
+barplot(
+  t(hour_share_pct),
+  beside = TRUE,
+  col = mechanism_brand_colors,
+  names.arg = sprintf("%02d", 0:23),
+  las = 2,
+  cex.names = 0.75,
+  ylab = "% of detected changes for brand",
+  xlab = "Ontario local hour (America/Toronto)",
+  main = "Hour when a changed price was first observed",
+  ylim = c(0, max(hour_share_pct) * 1.3)
+)
+legend(
+  "topright",
+  legend = mechanism_brand_labels,
+  fill = mechanism_brand_colors,
+  bty = "n",
+  horiz = TRUE
+)
+barplot(
+  t(weekday_share_pct),
+  beside = TRUE,
+  col = mechanism_brand_colors,
+  names.arg = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+  ylab = "% of detected changes for brand",
+  xlab = "Day of week",
+  main = "Weekly pattern in observed price changes",
+  ylim = c(0, max(weekday_share_pct) * 1.3)
+)
+legend(
+  "topright",
+  legend = mechanism_brand_labels,
+  fill = mechanism_brand_colors,
+  bty = "n",
+  horiz = TRUE
+)
+mtext(
+  "Change time is the first scrape showing the new price, not the exact time it changed.",
+  outer = TRUE,
+  side = 3,
+  line = 0.3,
+  cex = 0.85
+)
+dev.off()
+
+ending_counts <- table(
+  factor(mechanism_changes$ending_cents, levels = 0:99),
+  factor(mechanism_changes$is_basics, levels = mechanism_brands)
+)
+ending_share_pct <- sweep(ending_counts, 2, colSums(ending_counts), "/") * 100
+ending_summary <- as.data.frame(ending_counts)
+names(ending_summary) <- c("ending_cents", "is_basics", "detected_changes")
+ending_summary$ending_cents <- as.integer(as.character(ending_summary$ending_cents))
+ending_summary$is_basics <- as.integer(as.character(ending_summary$is_basics))
+ending_summary$brand <- mechanism_brand_labels[
+  match(ending_summary$is_basics, mechanism_brands)
+]
+ending_summary$share_within_brand_pct <- 100 * ending_summary$detected_changes /
+  mechanism_brand_summary$detected_price_changes[
+    match(ending_summary$brand, mechanism_brand_summary$brand)
+  ]
+write.csv(
+  ending_summary,
+  file.path(output_dir, "mechanism_price_endings.csv"),
+  row.names = FALSE
+)
+
+png(
+  file.path(output_dir, "mechanism_price_endings.png"),
+  width = 2200,
+  height = 1100,
+  res = 160
+)
+par(mar = c(6, 6, 5, 3) + 0.1)
+ending_positions <- barplot(
+  t(ending_share_pct),
+  beside = TRUE,
+  col = mechanism_brand_colors,
+  border = NA,
+  names.arg = ifelse(0:99 %% 5 == 0 | 0:99 == 99, sprintf("%02d", 0:99), ""),
+  las = 2,
+  cex.names = 0.7,
+  ylab = "% of detected price changes",
+  xlab = "Cents ending of the newly observed price (99 = .99)",
+  main = "Price endings on observed price changes",
+  ylim = c(0, max(ending_share_pct) * 1.3)
+)
+abline(v = mean(ending_positions[, 100]), col = "grey20", lty = 2)
+legend(
+  "topright",
+  legend = mechanism_brand_labels,
+  fill = mechanism_brand_colors,
+  bty = "n",
+  horiz = TRUE
+)
+text(
+  mean(ending_positions[, 100]),
+  max(ending_share_pct[100, ]) * 1.08,
+  labels = ".99",
+  pos = 3,
+  cex = 0.9
+)
+dev.off()
+
+writeLines(
+  c(
+    "Descriptive indicators of algorithmic-looking pricing patterns",
+    "",
+    sprintf(
+      "Detected price changes: %d (%d 3P Twin; %d Amazon Basics).",
+      nrow(mechanism_changes),
+      mechanism_brand_summary$detected_price_changes[1],
+      mechanism_brand_summary$detected_price_changes[2]
+    ),
+    sprintf(
+      "Prices ending in .99: 3P Twin %d/%d (%.1f%%); Amazon Basics %d/%d (%.1f%%).",
+      mechanism_brand_summary$endings_99[1],
+      mechanism_brand_summary$detected_price_changes[1],
+      mechanism_brand_summary$endings_99_pct[1],
+      mechanism_brand_summary$endings_99[2],
+      mechanism_brand_summary$detected_price_changes[2],
+      mechanism_brand_summary$endings_99_pct[2]
+    ),
+    "Change times are first-detection timestamps; actual changes happened between scrapes.",
+    "Timestamps are interpreted as Ontario Eastern Time (America/Toronto; EST/EDT as applicable).",
+    "Change-ending and timing percentages weight each detected event equally, so products with more changes contribute more.",
+    "These comparisons are descriptive and cannot establish that pricing was algorithmic."
+  ),
+  file.path(output_dir, "mechanism_pricing_summary.txt")
+)
+
 mean_or_na <- function(values) {
   values <- values[is.finite(values)]
   if (length(values)) mean(values) else NA_real_

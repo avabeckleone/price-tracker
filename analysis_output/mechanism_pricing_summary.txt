@@ -1,0 +1,8 @@
+Descriptive indicators of algorithmic-looking pricing patterns
+
+Detected price changes: 377 (307 3P Twin; 70 Amazon Basics).
+Prices ending in .99: 3P Twin 51/307 (16.6%); Amazon Basics 23/70 (32.9%).
+Change times are first-detection timestamps; actual changes happened between scrapes.
+Timestamps are interpreted as Ontario Eastern Time (America/Toronto; EST/EDT as applicable).
+Change-ending and timing percentages weight each detected event equally, so products with more changes contribute more.
+These comparisons are descriptive and cannot establish that pricing was algorithmic.
