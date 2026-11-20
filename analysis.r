@@ -672,41 +672,20 @@ mechanism_rows <- mechanism_rows[
   order(mechanism_rows$asin, mechanism_rows$observed_at),
 ]
 mechanism_rows$previous_price <- NA_real_
-mechanism_rows$previous_observed_at <- as.POSIXct(
-  NA,
-  origin = "1970-01-01",
-  tz = "America/Toronto"
-)
 for (asin_rows in split(seq_len(nrow(mechanism_rows)), mechanism_rows$asin)) {
   if (length(asin_rows) > 1) {
     current_rows <- asin_rows[-1]
     previous_rows <- asin_rows[-length(asin_rows)]
     mechanism_rows$previous_price[current_rows] <-
       mechanism_rows$price[previous_rows]
-    mechanism_rows$previous_observed_at[current_rows] <-
-      mechanism_rows$observed_at[previous_rows]
   }
 }
-mechanism_changes <- subset(
-  mechanism_rows,
-  !is.na(previous_price) &
-    round(price * 100) != round(previous_price * 100)
-)
-mechanism_changes$recorded_hour <- as.integer(
-  format(mechanism_changes$observed_at, "%H", tz = "America/Toronto")
-)
-mechanism_changes$weekday <- as.integer(
-  format(mechanism_changes$observed_at, "%u", tz = "America/Toronto")
-)
-mechanism_changes$ending_cents <- as.integer(round(mechanism_changes$price * 100) %% 100)
-mechanism_changes$hours_since_previous_observation <- as.numeric(difftime(
-  mechanism_changes$observed_at,
-  mechanism_changes$previous_observed_at,
-  units = "hours"
-))
+mechanism_rows$price_changed <- !is.na(mechanism_rows$previous_price) &
+  round(mechanism_rows$price * 100) != round(mechanism_rows$previous_price * 100)
+mechanism_rows$ending_cents <- as.integer(round(mechanism_rows$price * 100) %% 100)
+mechanism_changes <- subset(mechanism_rows, price_changed)
 mechanism_brands <- c(0, 1)
 mechanism_brand_labels <- c("3P Twin", "Amazon Basics")
-mechanism_brand_colors <- c("grey35", "#0072B2")
 
 mechanism_brand_summary <- do.call(
   rbind,
@@ -720,140 +699,131 @@ mechanism_brand_summary <- do.call(
       detected_price_changes = nrow(brand_rows),
       endings_99 = sum(brand_rows$ending_cents == 99),
       endings_99_pct = 100 * mean(brand_rows$ending_cents == 99),
-      median_observation_interval_hours = median(
-        brand_rows$hours_since_previous_observation
-      ),
       stringsAsFactors = FALSE
     )
   })
 )
-write.csv(
-  mechanism_brand_summary,
-  file.path(output_dir, "mechanism_price_change_summary.csv"),
-  row.names = FALSE
-)
 
-hour_counts <- table(
-  factor(mechanism_changes$recorded_hour, levels = 0:23),
-  factor(mechanism_changes$is_basics, levels = mechanism_brands)
+mechanism_item_summary <- do.call(
+  rbind,
+  lapply(
+    split(
+      mechanism_rows,
+      interaction(mechanism_rows$pair_id, mechanism_rows$is_basics, drop = TRUE)
+    ),
+    function(item_rows) {
+      item_changes <- item_rows[item_rows$price_changed, ]
+      data.frame(
+        pair_id = item_rows$pair_id[1],
+        is_basics = item_rows$is_basics[1],
+        observed_days = length(unique(as.Date(
+          item_rows$observed_at,
+          tz = "America/Toronto"
+        ))),
+        price_changes = nrow(item_changes),
+        endings_99 = sum(item_changes$ending_cents == 99),
+        ending_99_share = if (nrow(item_changes)) {
+          mean(item_changes$ending_cents == 99)
+        } else {
+          NA_real_
+        }
+      )
+    }
+  )
 )
-hour_share_pct <- sweep(hour_counts, 2, colSums(hour_counts), "/") * 100
-weekday_counts <- table(
-  factor(mechanism_changes$weekday, levels = 1:7),
-  factor(mechanism_changes$is_basics, levels = mechanism_brands)
+mechanism_change_model <- fepois(
+  price_changes ~ is_basics | pair_id,
+  offset = ~log(observed_days),
+  data = mechanism_item_summary,
+  cluster = ~pair_id
 )
-weekday_share_pct <- sweep(weekday_counts, 2, colSums(weekday_counts), "/") * 100
-
-png(
-  file.path(output_dir, "mechanism_change_timing.png"),
-  width = 2000,
-  height = 1300,
-  res = 160
+ending_share_wide <- reshape(
+  mechanism_item_summary[
+    , c("pair_id", "is_basics", "ending_99_share")
+  ],
+  idvar = "pair_id",
+  timevar = "is_basics",
+  direction = "wide"
 )
-par(mfrow = c(2, 1), mar = c(5, 5, 4, 2) + 0.1, oma = c(0, 0, 2, 0))
-barplot(
-  t(hour_share_pct),
-  beside = TRUE,
-  col = mechanism_brand_colors,
-  names.arg = sprintf("%02d", 0:23),
-  las = 2,
-  cex.names = 0.75,
-  ylab = "% of detected changes for brand",
-  xlab = "Ontario local hour (America/Toronto)",
-  main = "Hour when a changed price was first observed",
-  ylim = c(0, max(hour_share_pct) * 1.3)
-)
-legend(
-  "topright",
-  legend = mechanism_brand_labels,
-  fill = mechanism_brand_colors,
-  bty = "n",
-  horiz = TRUE
-)
-barplot(
-  t(weekday_share_pct),
-  beside = TRUE,
-  col = mechanism_brand_colors,
-  names.arg = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
-  ylab = "% of detected changes for brand",
-  xlab = "Day of week",
-  main = "Weekly pattern in observed price changes",
-  ylim = c(0, max(weekday_share_pct) * 1.3)
-)
-legend(
-  "topright",
-  legend = mechanism_brand_labels,
-  fill = mechanism_brand_colors,
-  bty = "n",
-  horiz = TRUE
-)
-mtext(
-  "Change time is the first scrape showing the new price, not the exact time it changed.",
-  outer = TRUE,
-  side = 3,
-  line = 0.3,
-  cex = 0.85
-)
-dev.off()
-
-ending_counts <- table(
-  factor(mechanism_changes$ending_cents, levels = 0:99),
-  factor(mechanism_changes$is_basics, levels = mechanism_brands)
-)
-ending_share_pct <- sweep(ending_counts, 2, colSums(ending_counts), "/") * 100
-ending_summary <- as.data.frame(ending_counts)
-names(ending_summary) <- c("ending_cents", "is_basics", "detected_changes")
-ending_summary$ending_cents <- as.integer(as.character(ending_summary$ending_cents))
-ending_summary$is_basics <- as.integer(as.character(ending_summary$is_basics))
-ending_summary$brand <- mechanism_brand_labels[
-  match(ending_summary$is_basics, mechanism_brands)
+eligible_ending_pairs <- ending_share_wide$pair_id[
+  complete.cases(ending_share_wide[
+    , c("ending_99_share.0", "ending_99_share.1")
+  ])
 ]
-ending_summary$share_within_brand_pct <- 100 * ending_summary$detected_changes /
-  mechanism_brand_summary$detected_price_changes[
-    match(ending_summary$brand, mechanism_brand_summary$brand)
-  ]
-write.csv(
-  ending_summary,
-  file.path(output_dir, "mechanism_price_endings.csv"),
-  row.names = FALSE
+mechanism_ending_items <- subset(
+  mechanism_item_summary,
+  pair_id %in% eligible_ending_pairs
 )
-
-png(
-  file.path(output_dir, "mechanism_price_endings.png"),
-  width = 2200,
-  height = 1100,
-  res = 160
+mechanism_ending_model <- feols(
+  ending_99_share ~ is_basics | pair_id,
+  data = mechanism_ending_items,
+  cluster = ~pair_id
 )
-par(mar = c(6, 6, 5, 3) + 0.1)
-ending_positions <- barplot(
-  t(ending_share_pct),
-  beside = TRUE,
-  col = mechanism_brand_colors,
-  border = NA,
-  names.arg = ifelse(0:99 %% 5 == 0 | 0:99 == 99, sprintf("%02d", 0:99), ""),
-  las = 2,
-  cex.names = 0.7,
-  ylab = "% of detected price changes",
-  xlab = "Cents ending of the newly observed price (99 = .99)",
-  main = "Price endings on observed price changes",
-  ylim = c(0, max(ending_share_pct) * 1.3)
+ending_share_differences <- ending_share_wide$ending_99_share.1 -
+  ending_share_wide$ending_99_share.0
+ending_share_differences <- ending_share_differences[
+  is.finite(ending_share_differences)
+]
+ending_share_discordant <- ending_share_differences[
+  ending_share_differences != 0
+]
+ending_share_sign_test <- binom.test(
+  sum(ending_share_discordant > 0),
+  length(ending_share_discordant),
+  p = 0.5
 )
-abline(v = mean(ending_positions[, 100]), col = "grey20", lty = 2)
-legend(
-  "topright",
-  legend = mechanism_brand_labels,
-  fill = mechanism_brand_colors,
-  bty = "n",
-  horiz = TRUE
+mechanism_model_table <- etable(
+  mechanism_change_model,
+  mechanism_ending_model,
+  headers = c("Price changes", "Price endings: .99 share"),
+  fitstat = ~n
 )
-text(
-  mean(ending_positions[, 100]),
-  max(ending_share_pct[100, ]) * 1.08,
-  labels = ".99",
-  pos = 3,
-  cex = 0.9
+change_rate_coef <- coeftable(mechanism_change_model)["is_basics", ]
+change_rate_ci <- exp(
+  unname(change_rate_coef["Estimate"]) +
+    c(-1, 1) * qnorm(0.975) * unname(change_rate_coef["Std. Error"])
 )
-dev.off()
+change_rate_ratio <- exp(unname(change_rate_coef["Estimate"]))
+ending_share_coef <- coeftable(mechanism_ending_model)["is_basics", ]
+ending_share_direction <- if (unname(ending_share_coef["Estimate"]) < 0) {
+  "lower"
+} else {
+  "higher"
+}
+writeLines(
+  c(
+    capture.output(print(mechanism_model_table)),
+    "",
+    sprintf(
+      "Price-change rate ratio (Amazon Basics / 3P Twin): %.2f (95%% CI %.2f to %.2f; clustered p = %.3f).",
+      change_rate_ratio,
+      change_rate_ci[1],
+      change_rate_ci[2],
+      unname(change_rate_coef["Pr(>|z|)"])
+    ),
+    sprintf(
+      "Price-change model uses %d matched pairs after dropping pairs with no observed changes on either side.",
+      nobs(mechanism_change_model) / 2
+    ),
+    sprintf(
+      "Among %d pairs with price changes for both products, Amazon Basics' .99 share is %.1f percentage points %s than its twin's (clustered p = %.3f).",
+      length(eligible_ending_pairs),
+      abs(100 * unname(ending_share_coef["Estimate"])),
+      ending_share_direction,
+      unname(ending_share_coef["Pr(>|t|)"])
+    ),
+    sprintf(
+      "Paired exact sign check: of %d non-tied pairs, %d favored Amazon Basics and %d favored the twin (p = %.4f).",
+      length(ending_share_discordant),
+      sum(ending_share_discordant > 0),
+      sum(ending_share_discordant < 0),
+      ending_share_sign_test$p.value
+    ),
+    "The .99 model gives each product equal weight and is restricted to pairs with at least one detected price change for both products.",
+    "Both models use pair fixed effects and standard errors clustered by pair. Results are exploratory and are not adjusted for testing multiple patterns."
+  ),
+  file.path(output_dir, "mechanism_regression.txt")
+)
 
 writeLines(
   c(
@@ -876,7 +846,7 @@ writeLines(
     ),
     "Change times are first-detection timestamps; actual changes happened between scrapes.",
     "Timestamps are interpreted as Ontario Eastern Time (America/Toronto; EST/EDT as applicable).",
-    "Change-ending and timing percentages weight each detected event equally, so products with more changes contribute more.",
+    "The pooled .99-ending share weights each detected change equally, so products with more changes contribute more.",
     "These comparisons are descriptive and cannot establish that pricing was algorithmic."
   ),
   file.path(output_dir, "mechanism_pricing_summary.txt")

@@ -1,0 +1,20 @@
+                mechanism_chan..        mechanism_endin..
+                   Price changes Price endings: .99 share
+Dependent Var.:    price_changes          ending_99_share
+                                                         
+is_basics       -1.478* (0.6426)        -0.2258* (0.0801)
+Fixed-Effects:  ----------------        -----------------
+pair_id                      Yes                      Yes
+_______________ ________________        _________________
+Family                   Poisson                      OLS
+S.E.: Clustered      by: pair_id              by: pair_id
+Observations                  38                       26
+---
+Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+Price-change rate ratio (Amazon Basics / 3P Twin): 0.23 (95% CI 0.06 to 0.80; clustered p = 0.021).
+Price-change model uses 19 matched pairs after dropping pairs with no observed changes on either side.
+Among 13 pairs with price changes for both products, Amazon Basics' .99 share is 22.6 percentage points lower than its twin's (clustered p = 0.016).
+Paired exact sign check: of 9 non-tied pairs, 0 favored Amazon Basics and 9 favored the twin (p = 0.0039).
+The .99 model gives each product equal weight and is restricted to pairs with at least one detected price change for both products.
+Both models use pair fixed effects and standard errors clustered by pair. Results are exploratory and are not adjusted for testing multiple patterns.
